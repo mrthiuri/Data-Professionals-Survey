@@ -1,0 +1,413 @@
+---
+title: "Phoenix Compensation survey"
+output: pdf_document
+date: "2024-05-28"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Phoenix data professional survey.
+
+**Hi there**🤚🏾**, I'm Morgan, a data analyst and aspiring data scientist, connect with me:**
+
+[Let's connect on LinkedIn](https://www.linkedin.com/in/morgan-mbatia-40151327a/ "Click here to connect")
+
+**This report was prepared and is the work of Morgan Thiuri.**
+
+This markdown file contains the analysis of the data collected by Phoenix Community, a community of data professionals.
+
+Before we jump in, here are some key findings of the analysis:
+
+-   **The survey consisted of 173 respondents.**
+
+-   **There is an almost equal gender split at 49% male and 50% females.**
+
+-   **The survey revealed 33 different job titles from data professionals in Kenya.**
+
+-   **Most of the data professionals are Data Analysts.**
+
+-   **Majority of the analysts hold Mid-Level roles.**
+
+-   **Data professionals who took part in the survey have 3-5 years of work experience.**
+
+-   **The most common work- set up among the professionals is a full office work set up.**
+
+-   **The average salary of a data professional is Ksh 109,362.54.**
+
+-   **Here's an image that shows the tech stack used across the profession:**
+
+    ![](Screenshot 2024-05-28 194632.jpg)
+
+## Data Import , Cleaning and Wrangling.
+
+```{r}
+# importing pakages
+library(tidyverse)
+library(janitor)
+library(skimr)
+library(readxl)
+library(stringr)
+library(ggplot2)
+library(wordcloud2)
+```
+
+```{r}
+# importing the data set
+file_path<- "C:/Users/user pc/Desktop/My Projects/Compensation Analysis/compensation data (Responses).xlsx"
+comp_v1<- read_excel(file_path) # compensation version 1 is our original dataset
+View(comp_v1)
+```
+
+```{r}
+# obtaining a brief overview of our dataset
+skim_without_charts(comp_v1)
+```
+
+All columns apart from the time stamp column are marked as character. The survey consists of 173 participants initially.
+
+## Data Cleaning.
+
+```{r}
+# creating a copy to work with and maintaining original dataframe
+comp_v2<- comp_v1
+
+# dropping the timestamp column
+
+column_names<- c(colnames(comp_v2))  # entering column names into a vector toindex during analysis
+column_names
+
+# renaming columns and dropping the timestamp column
+comp_v2<- comp_v2%>%
+  select(-column_names[1])%>%
+  rename(
+    "Current_Role"=column_names[2],
+    "Other_roles"= column_names[3],
+    "Level"= column_names[4],
+    "Experience"=column_names[5],
+    "Industry"= column_names[6],
+    "Gender"=column_names[7],
+    "Main_tech_stack"=column_names[8],
+    "Other_relavant_tools"=column_names[9],
+    "Monthly_gross_salary"=column_names[10],
+    "Other_benefits"=column_names[11],
+    "Work_setup"=column_names[12],
+    "Employer_type"=column_names[13]
+  )
+View(comp_v2)
+```
+
+Very few data professionals filled out the 'other tools' section of the survey,
+
+Approach: concatenate the other relevant tools with the main tech stack column and rename that to, tech stack.
+
+```{r}
+# data tranformation
+
+# addressing inconsistencies
+comp_v2<- comp_v2 %>% 
+  mutate(Other_relavant_tools=
+           ifelse(Other_relavant_tools=="n/a",NA,Other_relavant_tools))
+unique(comp_v2$Other_relavant_tools)
+View(comp_v2)
+```
+
+```{r}
+# checking if the Main tech stack column contains the entry other and dropping it to concatenate
+comp_v3 <- comp_v2 %>% 
+  mutate(Main_tech_stack = ifelse(str_detect(Main_tech_stack, ", Other$"), 
+                                  str_replace(Main_tech_stack, ", Other$", ""),  # Drop ", Other" if it appears at the end
+                                  Main_tech_stack))
+
+View(comp_v3)
+
+# tranformation
+comp_v3<- comp_v3 %>% 
+  mutate(Main_tech_stack=
+           ifelse(Main_tech_stack=='Other',Other_relavant_tools,Main_tech_stack)) %>% 
+  rename("Tech_stack"=Main_tech_stack) # renaming column
+View(comp_v3)
+# concatenating and droping the other relvant tools column
+comp_v3<- comp_v3 %>% 
+  mutate(Tech_stack=
+           ifelse(is.na(Other_relavant_tools),Tech_stack,
+                  paste(Tech_stack,Other_relavant_tools,sep=","))) 
+# cleaning up
+comp_v3 <- comp_v3 %>% 
+  mutate(Tech_stack = ifelse(Tech_stack == "Microsoft office,Microsoft office", 
+                             "Microsoft office", 
+                             Tech_stack))
+
+# one more inconsistent column
+comp_v3 <- comp_v3 %>% 
+  mutate(Tech_stack = ifelse(Tech_stack == "Company provided,Company provided", 
+                             "Company provided", 
+                             Tech_stack))
+
+# dropping the other_relevant_tools column
+comp_v3<- comp_v3 %>% 
+  select(-Other_relavant_tools) # dropping the other relevant tools column
+  
+View(comp_v3)
+```
+
+```{r}
+skim_without_charts(comp_v3)
+```
+
+The other roles column has 130 missing values, and all columns are have the data type character.
+
+```{r}
+# correcting the entires in the monthly_gross_salary
+unique(comp_v3$Monthly_gross_salary)
+```
+
+This is pure chaos😭.
+
+If you are unemployed, then you're getting no pay.
+
+For the NA, we can impute the missing values with the average salary.
+
+We have variants of the NA type ranging from Nan to Nill, each of these entries is imputed based on the properties of other columns, for example, it makes no sense that a person with over 5 years experience has no salary of accompanying benefits, thus we impute that value with the average salary.
+
+We also have different currencies, if not explicitly mentioned, then it is safe to assume that the salary is in Kenyan shillings given the survey was conducted in Kenya.
+
+We can convert that entry to Kenyan shillings using the exchange rate as of the time of this analysis, 28/05/2024.
+
+We also notice a couple of formats representing no pay, The standard for this will be 0
+
+```{r}
+# handling the inconsistencies
+exchange_rate_eur = 144.6 # i.e 1 Euro = 144.6
+exchange_rate_dollar = 133
+
+comp_v3<- comp_v3 %>% 
+  mutate(Monthly_gross_salary=
+           ifelse(Monthly_gross_salary=="920 EUROS",920*exchange_rate_eur,Monthly_gross_salary))%>%
+  mutate(Monthly_gross_salary=
+           ifelse(Monthly_gross_salary=="500$",500*exchange_rate_dollar,Monthly_gross_salary))%>%
+  mutate(Monthly_gross_salary=
+           ifelse(Monthly_gross_salary=="15,000/-",15000,Monthly_gross_salary))%>% 
+    mutate(Monthly_gross_salary=
+           ifelse(Monthly_gross_salary=="112,000KES",112000,Monthly_gross_salary))%>%
+  mutate(Monthly_gross_salary=
+           ifelse(Monthly_gross_salary=="Unemployed",0,Monthly_gross_salary)) %>% 
+  mutate(Monthly_gross_salary=
+           ifelse(Monthly_gross_salary=="Nill" | Monthly_gross_salary=="Nan",0,Monthly_gross_salary)) %>% 
+  mutate(Monthly_gross_salary=
+           ifelse(Monthly_gross_salary=="N/A" & Experience=="Beginner",0,Monthly_gross_salary)) %>% 
+  mutate(Monthly_gross_salary=
+           ifelse(Monthly_gross_salary=="N/A",NA,Monthly_gross_salary))%>% 
+  mutate(Monthly_gross_salary=
+           ifelse(Monthly_gross_salary=="NA" & Experience=="Beginner",0,Monthly_gross_salary)) %>%
+  mutate(Monthly_gross_salary=
+             ifelse(Monthly_gross_salary=="NA" & Experience=="Over 5 Yrs",NA,Monthly_gross_salary)) %>% 
+  mutate(Monthly_gross_salary=
+           ifelse(Monthly_gross_salary=="n/a",0,Monthly_gross_salary))
+```
+
+Now that we have something close to a consistent formatting, we can covert the datatype of the column to numeric.
+
+```{r}
+comp_v3 <- comp_v3 %>%
+  mutate(Monthly_gross_salary = as.numeric(Monthly_gross_salary)) %>% 
+  mutate(Monthly_gross_salary=
+           ifelse(is.na(Monthly_gross_salary),mean(Monthly_gross_salary,na.rm=TRUE),Monthly_gross_salary))# imputing the NA values with the average
+class(comp_v3$Monthly_gross_salary)
+unique(comp_v3$Monthly_gross_salary)
+
+```
+
+```{r}
+# cleaning the names
+clean_names(comp_v3)
+```
+
+**Hi there**🤚🏾**, I'm Morgan, a data analyst and aspiring data scientist, connect with me:**
+
+[Let's connect on LinkedIn](https://www.linkedin.com/in/morgan-mbatia-40151327a/ "Click here to connect")
+
+## Insights and visualisations.
+
+Some of the entries in the Other_Roles columns can be formatted to fit our distinct categories in the Current Role column.
+
+```{r}
+# tranformation
+
+comp_v3<- comp_v3 %>% 
+  mutate(Current_Role=
+           ifelse(Current_Role=='Other' & Other_roles=="Data Analyst" & !is.na(Other_roles),"Data Analyst",Current_Role))
+unique(comp_v3$Current_Role)
+```
+
+```{r}
+ggplot(data=comp_v3)+
+  geom_bar(mapping=aes(x=Current_Role,fill=Current_Role))+
+  geom_text(stat = 'count', aes(x = Current_Role, label = ..count..), vjust = -0.1)+
+  labs(x="Data Professional",y="Number of professionals from survey",title="Distribution of data professionals accross different roles",subtitle = "Data from the Phoenix Ke Analytics Survey",caption = "Data Analysis done by Morgan Thiuri")
+```
+
+We seem to have a lot of professionals in other roles, worth exploring
+
+```{r}
+other_roles_df<- comp_v3 %>% 
+  drop_na() %>% 
+  filter(Current_Role=="Other") %>% 
+  select(-Current_Role) %>% 
+  group_by(Other_roles)
+View(other_roles_df)
+```
+
+So other than the commonly known roles in data, what other roles do the participants have?\
+
+```{r}
+unique(other_roles_df$Other_roles)
+```
+
+**We have 33 other data roles. This might be the career of the future, in future analysis we'd maybe determine the progression and measures like job satisfaction.**
+
+We have some more cleaning to do, this section of the survey must have open ended, hence the inconsistencies, let's try and correct the fragrant ones
+
+```{r}
+other_roles_df <- other_roles_df %>%
+  mutate(Other_roles = case_when(
+    str_detect(Other_roles, "^Business") ~ "BI Analyst",
+    str_detect(Other_roles, "^Human") ~ "HRM",
+    TRUE ~ Other_roles
+  )) %>% 
+  mutate(Other_roles=
+           ifelse(Other_roles=="Data Manager (Digital)"|Other_roles=="Data Mangement Associate"|Other_roles=="Data manager","Data Manager",Other_roles))
+
+
+```
+
+```{r}
+ggplot(data=other_roles_df)+
+  geom_bar(mapping = aes(x=other_roles_df$Other_roles),fill="blue")+
+  labs(x="Data Roles",y="Other roles",title="More data professionals and their distribution",caption = "Data Analysis done by Morgan Thiuri" )+
+  coord_flip()
+```
+
+**How long have the professionals been in their specific roles?**
+
+```{r}
+unique(comp_v3$Level)
+```
+
+We need to clean this too😪. Lets drop the additional text after the level .
+
+```{r}
+comp_v3 <- comp_v3 %>%
+  mutate(Level = str_replace(Level,"\\s+eg.*$", ""))
+unique(comp_v3$Level)
+```
+
+```{r}
+ggplot(data=comp_v3)+
+  geom_bar(mapping=aes(x=Level,fill=Level))+
+  geom_text(stat = 'count', aes(x = Level, label = ..count..), vjust = -0.1)+
+  labs(x="Career Level",y="Number of professionals from survey",title="Distribution of data professionals across different career levels",subtitle = "Data from the Phoenix Ke Analytics Survey",caption = "Data Analysis done by Morgan Thiuri")
+```
+
+**What industries do the respondents work in?**
+
+```{r}
+unique(comp_v3$Industry)
+
+```
+
+We have 85 different industries.
+
+**Gender Analysis.**
+
+```{r}
+ggplot(data=comp_v3)+
+  geom_bar(mapping=aes(x=Gender,fill=Current_Role))+
+  geom_text(stat = 'count', aes(x = Gender, label = ..count..), vjust = -0.1)+
+  labs(x="Gender",y="Number of professionals from survey",title="Distribution of data professionals by Gender and roles",subtitle = "Data from the Phoenix Ke Analytics Survey",caption = "Data Analysis done by Morgan Thiuri")
+
+```
+
+There is gender equality in data. We have significantly fewer female Data Engineers as compared to their male counterparts.
+
+**Employer Type.**
+
+```{r}
+unique(comp_v3$Employer_type)
+```
+
+```{r}
+ggplot(data=comp_v3)+
+  geom_bar(mapping=aes(x=Employer_type,fill=Employer_type))+
+  geom_text(stat = 'count', aes(x = Employer_type, label = ..count..), vjust = -0.1)+
+  labs(x="Employer",y="Number of professionals from survey",title="Distribution of data professionals across different employer types",subtitle = "Data from the Phoenix Ke Analytics Survey",caption = "Data Analysis done by Morgan Thiuri")
+```
+
+**What does the work set-up look like?**
+
+```{r}
+ggplot(data=comp_v3)+
+  geom_bar(mapping=aes(x=Work_setup,fill=Work_setup))+
+  geom_text(stat = 'count', aes(x = Work_setup, label = ..count..), vjust = -0.1)+
+  labs(x="Employer",y="Number of professionals from survey",title="Distribution of data professionals across different work setups",subtitle = "Data from the Phoenix Ke Analytics Survey",caption = "Data Analysis done by Morgan Thiuri")+
+  theme(axis.text.x = element_blank())
+```
+
+Looks like I'm very likely to be commutting to work🙂.
+
+**What are the different experience levels?**
+
+```{r}
+unique(comp_v3$Experience)
+```
+
+```{r}
+ggplot(data = comp_v3) +
+  geom_bar(mapping = aes(x = Experience,fill=Experience)) +
+  geom_text(stat = 'count', aes(x = Experience, label = ..count..), vjust = -0.1)+
+  labs(x="Years of Experience",y="Number of professionals from survey",title="Distribution of data professionals across different experience levels",subtitle = "Data from the Phoenix Ke Analytics Survey",caption = "Data Analysis done by Morgan Thiuri")
+
+```
+
+Just like the rest of the world, in Kenya, data analytics and data science among other data roles are still developing roles. I'm glad I have decided this to be my career path.
+
+**How much do these guys make?**💸
+
+```{r}
+max_salary<- as.numeric(max(comp_v3$Monthly_gross_salary))
+min_salary<- min(comp_v3$Monthly_gross_salary)
+average_salary<- mean(comp_v3$Monthly_gross_salary)
+print(paste("The highest paid professional from the survey earns",max_salary,".The lowest paid earns",min_salary,". The average salary for a data professional is",average_salary))
+
+```
+
+**Ok, so what tools do they use? For this, we use a word cloud**
+
+```{r}
+wordcloud(comp_v3$Tech_stack)
+
+```
+
+```{r}
+# word frequency table
+word_freq <- table(unlist(strsplit(tolower(comp_v3$Tech_stack), ",\\s*")))
+word_freq_df <- data.frame(word = names(word_freq), freq = as.numeric(word_freq))
+
+# ploting the word cloud
+wordcloud2(word_freq_df, size = 0.8)
+# saving our result
+ggsave("wordcloud_tech.png", device = "png")
+
+```
+
+Excel is still king. R ,the tool we used for this analysis ranks among the most used tools for data professionals.
+
+Let's export our cleaned data into Power BI, a tool that has well over 64% of data professionals in Kenya using it, to tell a wholesome and more appealing story.
+
+\
+**Hi there, I'm Morgan, a data analyst and aspiring data scientist, connect with me:**
+
+[Let's connect on LinkedIn](https://www.linkedin.com/in/morgan-mbatia-40151327a/ "Click here to connect")
+
+# Thank you for sticking around till the end!
